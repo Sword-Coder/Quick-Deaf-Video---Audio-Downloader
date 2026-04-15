@@ -18,8 +18,11 @@ if (!fs.existsSync(downloadDir)) {
 
 function sanitizeFilename(title) {
   let result = "";
+  let hasLeadingApostrophe = false;
+
   for (let i = 0; i < title.length; i++) {
     const char = title[i];
+    const nextChar = title[i + 1];
     if (char === ",") {
       result += "_";
     } else if (char === "-") {
@@ -27,20 +30,35 @@ function sanitizeFilename(title) {
     } else if (char === "&") {
       result += "_";
     } else if (char === "'") {
-      result += "_";
+      if (result.length === 0) {
+        hasLeadingApostrophe = true;
+      } else {
+        result += "_";
+      }
     } else if (char === " ") {
       result += "_";
     } else if (char === "!") {
-      result += "_";
+      result += "__";
       if (nextChar === " ") i++;
     } else if (char === "~") {
-      result += "_";
+      result += "__";
       if (nextChar === " ") i++;
     } else {
       result += char;
     }
   }
-  return result.replace(/^_|_$/g, "");
+
+  // Handle leading apostrophe - add leading underscore
+  if (hasLeadingApostrophe) {
+    result = "_" + result;
+  }
+
+  // Handle trailing special chars - add trailing underscore
+  if (result.endsWith("_") || result.endsWith("__")) {
+    result += "_";
+  }
+
+  return result;
 }
 
 app.post("/download", async (req, res) => {
@@ -149,7 +167,7 @@ app.get("/download-zip", (req, res) => {
     return res.status(404).json({ error: "No files to download" });
   }
 
-  res.setHeader("Content-Disposition", "attachment; filename=songs.zip");
+  res.setHeader("Content-Disposition", "attachment; filename=Deaf-Songs.zip");
   res.setHeader("Content-Type", "application/zip");
 
   const archive = archiver("zip", { zlib: { level: 9 } });
