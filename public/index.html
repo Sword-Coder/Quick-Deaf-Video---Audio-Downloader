@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Batch MP3 Downloader</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; min-height: 100vh; padding: 20px; }
+    .container { max-width: 700px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+    h1 { text-align: center; margin-bottom: 20px; color: #333; }
+    .input-group { margin-bottom: 20px; }
+    label { display: block; margin-bottom: 8px; font-weight: 600; color: #555; }
+    input[type="text"], textarea { width: 100%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 14px; font-family: monospace; outline: none; transition: border-color 0.3s; }
+    input[type="text"]:focus, textarea:focus { border-color: #007bff; }
+    textarea { height: 200px; resize: vertical; }
+    button { padding: 14px 24px; background: #007bff; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background 0.3s; }
+    button:hover { background: #0056b3; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .progress { margin-top: 20px; }
+    .progress-item { display: flex; align-items: center; gap: 10px; padding: 10px; background: #f8f9fa; border-radius: 6px; margin-bottom: 8px; }
+    .progress-item.completed { background: #d4edda; }
+    .progress-item.failed { background: #f8d7da; }
+    .spinner { width: 20px; height: 20px; border: 3px solid #ddd; border-top-color: #007bff; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status-text { flex: 1; font-size: 14px; }
+    .download-zip { margin-top: 20px; display: none; }
+    .download-zip.visible { display: block; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Batch MP3 Downloader</h1>
+    
+    <div class="input-group">
+      <label for="stationId">Station ID:</label>
+      <input type="text" id="stationId" placeholder="e.g., 88bdb544-61a0-42e0-ac1f-5d317969c64c">
+    </div>
+
+    <div class="input-group">
+      <label for="songs">Songs (one per line):</label>
+      <textarea id="songs" placeholder="Each One, Reach One - Songs of Praise
+Ever Faithful, Ever True - The Wilds
+Harvest Time - Hutson Sisters"></textarea>
+    </div>
+
+    <button id="downloadBtn" onclick="startDownload()">Download All Songs</button>
+
+    <div id="progress" class="progress"></div>
+    <button id="downloadZipBtn" class="download-zip" onclick="downloadZip()">Download All as ZIP</button>
+  </div>
+
+  <script>
+    async function startDownload() {
+      const stationId = document.getElementById('stationId').value.trim();
+      const songsText = document.getElementById('songs').value.trim();
+      const progressDiv = document.getElementById('progress');
+      const downloadBtn = document.getElementById('downloadBtn');
+      const downloadZipBtn = document.getElementById('downloadZipBtn');
+
+      if (!stationId || !songsText) {
+        alert('Please enter station ID and songs');
+        return;
+      }
+
+      const songs = songsText.split('\n').filter(s => s.trim());
+      if (songs.length === 0) {
+        alert('Please enter at least one song');
+        return;
+      }
+
+      progressDiv.innerHTML = '';
+      downloadBtn.disabled = true;
+      downloadZipBtn.classList.remove('visible');
+
+      for (let i = 0; i < songs.length; i++) {
+        const song = songs[i].trim();
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'progress-item';
+        itemDiv.id = `item-${i}`;
+        itemDiv.innerHTML = `
+          <div class="spinner"></div>
+          <span class="status-text">${song}</span>
+        `;
+        progressDiv.appendChild(itemDiv);
+
+        try {
+          const res = await fetch('/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stationId, songs: [song] })
+          });
+          const data = await res.json();
+
+          if (data.results && data.results[0] && data.results[0].success) {
+            itemDiv.className = 'progress-item completed';
+            itemDiv.querySelector('.spinner').style.display = 'none';
+            itemDiv.querySelector('.status-text').textContent = `✓ ${song}`;
+          } else {
+            throw new Error(data.results?.[0]?.error || 'Download failed');
+          }
+        } catch (e) {
+          itemDiv.className = 'progress-item failed';
+          itemDiv.querySelector('.spinner').style.display = 'none';
+          itemDiv.querySelector('.status-text').textContent = `✗ ${song} - ${e.message}`;
+        }
+
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      downloadBtn.disabled = false;
+      downloadZipBtn.classList.add('visible');
+    }
+
+    function downloadZip() {
+      window.location.href = '/download-zip';
+    }
+  </script>
+</body>
+</html>
