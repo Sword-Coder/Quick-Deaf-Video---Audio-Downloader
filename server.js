@@ -92,7 +92,7 @@ app.post("/download", async (req, res) => {
   res.json({ results });
 });
 
-function downloadFile(url, dest) {
+function downloadFile(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
     console.log(`Starting download for: ${url}`);
 
@@ -111,6 +111,8 @@ function downloadFile(url, dest) {
     };
 
     const file = fs.createWriteStream(dest);
+    let downloadedBytes = 0;
+    let totalBytes = 0;
 
     const request = https.request(options, (response) => {
       console.log(`Response status: ${response.statusCode}`);
@@ -120,7 +122,15 @@ function downloadFile(url, dest) {
         reject(new Error(`HTTP ${response.statusCode}`));
         return;
       }
+      totalBytes = parseInt(response.headers["content-length"] || "0", 10);
       response.pipe(file);
+      response.on("data", (chunk) => {
+        downloadedBytes += chunk.length;
+        if (onProgress && totalBytes > 0) {
+          const percent = Math.round((downloadedBytes / totalBytes) * 100);
+          onProgress(percent);
+        }
+      });
       file.on("finish", () => {
         file.close();
         resolve();
@@ -134,7 +144,7 @@ function downloadFile(url, dest) {
       reject(e);
     });
 
-    request.setTimeout(30000, () => {
+    request.setTimeout(300000, () => {
       request.destroy();
       file.close();
       if (fs.existsSync(dest)) fs.unlinkSync(dest);
@@ -161,13 +171,15 @@ app.get("/download-file/:filename", (req, res) => {
 });
 
 app.get("/download-zip", (req, res) => {
-  const files = fs.readdirSync(downloadDir).filter((f) => f.endsWith(".mp3"));
+  const files = fs
+    .readdirSync(downloadDir)
+    .filter((f) => f.endsWith(".mp3") || f.endsWith(".webm"));
 
   if (files.length === 0) {
     return res.status(404).json({ error: "No files to download" });
   }
 
-  res.setHeader("Content-Disposition", "attachment; filename=Deaf-Songs.zip");
+  res.setHeader("Content-Disposition", "attachment; filename=Deaf-Files.zip");
   res.setHeader("Content-Type", "application/zip");
 
   const archive = archiver("zip", { zlib: { level: 9 } });
@@ -226,7 +238,7 @@ app.post("/search-videos", async (req, res) => {
         });
       });
       request.on("error", reject);
-      request.setTimeout(30000, () => {
+      request.setTimeout(300000, () => {
         request.destroy();
         reject(new Error("Request timeout"));
       });
@@ -235,9 +247,9 @@ app.post("/search-videos", async (req, res) => {
     });
 
     const allVideos = [
-      ...(response.approved || []).map(v => ({ ...v, ...v.value })),
-      ...(response.waitingApproval || []).map(v => ({ ...v.value })),
-      ...(response.withoutLyrics || []).map(v => ({ ...v.value })),
+      ...(response.approved || []).map((v) => ({ ...v, ...v.value })),
+      ...(response.waitingApproval || []).map((v) => ({ ...v.value })),
+      ...(response.withoutLyrics || []).map((v) => ({ ...v.value })),
     ];
 
     const results = [];
@@ -273,6 +285,198 @@ app.post("/search-videos", async (req, res) => {
     console.error("Search error:", e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+const AUDIO_STATION_ID = "88bdb544-61a0-42e0-ac1f-5d317969c64c";
+
+app.post("/download-all", async (req, res) => {
+  const { songs } = req.body;
+
+  if (!songs || !Array.isArray(songs) || songs.length === 0) {
+    return res.status(400).json({ error: "songs array required" });
+  }
+
+  const postData = JSON.stringify({
+    stationid: CREDENTIALS.stationId,
+    userid: CREDENTIALS.userId,
+    token: CREDENTIALS.token,
+  });
+
+  const options = {
+    hostname: "api.theanchor.app",
+    port: 443,
+    path: "/signLanguageRequest",
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(postData),
+    },
+  };
+
+  const response = await new Promise((resolve, reject) => {
+    const request = https.request(options, (response) => {
+      let data = "";
+      response.on("data", (chunk) => (data += chunk));
+      response.on("end", () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    request.on("error", reject);
+    request.setTimeout(60000, () => {
+      request.destroy();
+      reject(new Error("Request timeout"));
+    });
+    request.write(postData);
+    request.end();
+  });
+
+  const allVideos = [
+    ...(response.approved || []).map((v) => ({ ...v.value })),
+    ...(response.waitingApproval || []).map((v) => ({ ...v.value })),
+    ...(response.withoutLyrics || []).map((v) => ({ ...v.value })),
+  ];
+
+  const results = [];
+
+  for (const songTitle of songs) {
+    const trimmedTitle = songTitle.trim();
+    const { title, artist } = parseSongTitle(trimmedTitle);
+    const searchTerm = trimmedTitle.toLowerCase();
+
+    const found = allVideos.find((v) => {
+      const songField = v.song || "";
+      return songField.toLowerCase().includes(searchTerm);
+    });
+
+    if (!found) {
+      results.push({
+        song: trimmedTitle,
+        success: false,
+        error: "Video not found",
+      });
+      continue;
+    }
+
+    const mp3Filename = sanitizeFilename(trimmedTitle) + ".mp3";
+    const mp3FilePath = path.join(downloadDir, mp3Filename);
+    const mp3Url = `https://strm.theanchor.app/strm/${AUDIO_STATION_ID}/${mp3Filename}`;
+
+    console.log(`Downloading MP3: ${mp3Url}`);
+
+    try {
+      await downloadFile(mp3Url, mp3FilePath, (percent) => {
+        console.log(`MP3 ${trimmedTitle}: ${percent}%`);
+      });
+    } catch (e) {
+      console.error(`MP3 error for ${trimmedTitle}:`, e.message);
+      results.push({
+        song: trimmedTitle,
+        success: false,
+        error: `MP3: ${e.message}`,
+      });
+      continue;
+    }
+
+    const cleanArtist = artist
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .replace(/\s+/g, " ");
+    const cleanTitle2 = title
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .replace(/\s+/g, " ");
+    const videoFilename = `Deaf - ${cleanArtist} - ${cleanTitle2}.webm`;
+    const videoFilePath = path.join(downloadDir, videoFilename);
+
+    console.log(`Downloading video: ${found.video} -> ${videoFilename}`);
+
+    try {
+      await downloadFile(found.video, videoFilePath, (percent) => {
+        console.log(`Video ${trimmedTitle}: ${percent}%`);
+      });
+    } catch (e) {
+      console.error(`Video error for ${trimmedTitle}:`, e.message);
+      results.push({
+        song: trimmedTitle,
+        mp3Success: true,
+        videoSuccess: false,
+        error: `Video: ${e.message}`,
+      });
+      continue;
+    }
+
+    results.push({
+      song: trimmedTitle,
+      mp3Success: true,
+      videoSuccess: true,
+      mp3Filename,
+      videoFilename,
+    });
+
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  res.json({ results });
+});
+
+function parseSongTitle(input) {
+  const trimmed = input.trim();
+  const lastDashIndex = trimmed.lastIndexOf(" - ");
+  if (lastDashIndex === -1) {
+    return { title: trimmed, artist: "Unknown" };
+  }
+  const title = trimmed.substring(0, lastDashIndex).trim();
+  const artist = trimmed.substring(lastDashIndex + 3).trim();
+  return { title, artist };
+}
+
+function sanitizeForFilename(str) {
+  return str.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, "_");
+}
+
+app.post("/download-videos", async (req, res) => {
+  const { videos } = req.body;
+
+  if (!videos || !Array.isArray(videos) || videos.length === 0) {
+    return res.status(400).json({ error: "videos array required" });
+  }
+
+  const results = [];
+
+  for (const video of videos) {
+    if (!video.video || !video.song) {
+      results.push({
+        song: video.song,
+        success: false,
+        error: "Missing video URL or song title",
+      });
+      continue;
+    }
+
+    const { title, artist } = parseSongTitle(video.song);
+    const cleanArtist = artist
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .replace(/\s+/g, " ");
+    const cleanTitle = title.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, " ");
+    const filename = `Deaf - ${cleanArtist} - ${cleanTitle}.webm`;
+    const filePath = path.join(downloadDir, filename);
+
+    console.log(`Downloading video: ${video.video} -> ${filename}`);
+
+    try {
+      await downloadFile(video.video, filePath);
+      results.push({ song: video.song, success: true, filename });
+    } catch (e) {
+      console.error(`Error downloading ${video.song}:`, e.message);
+      results.push({ song: video.song, success: false, error: e.message });
+    }
+
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  res.json({ results });
 });
 
 const PORT = process.env.PORT || 3000;
