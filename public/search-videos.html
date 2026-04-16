@@ -17,6 +17,8 @@
     button { padding: 14px 24px; background: #007bff; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background 0.3s; }
     button:hover { background: #0056b3; }
     button:disabled { background: #ccc; cursor: not-allowed; }
+    .download-zip { margin-top: 20px; display: none; }
+    .download-zip.visible { display: block; }
     .results { margin-top: 20px; }
     .result-item { padding: 15px; background: #f8f9fa; border-radius: 6px; margin-bottom: 12px; }
     .result-item.found { background: #d4edda; }
@@ -42,12 +44,17 @@ Harvest Time - Hutson Sisters
 I Believe God - Alvin Martinez & Brooke Martinez"></textarea>
     </div>
 
-    <button id="searchBtn" onclick="searchVideos()">Search Videos</button>
+    <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+      <button id="searchBtn" onclick="searchVideos()">Search Videos</button>
+      <button id="downloadBtn" class="download-zip" onclick="downloadVideos()">Download Found Videos</button>
+    </div>
 
     <div id="results" class="results"></div>
   </div>
 
   <script>
+    let lastResults = [];
+
     async function searchVideos() {
       const songsText = document.getElementById('songs').value.trim();
       const resultsDiv = document.getElementById('results');
@@ -77,9 +84,10 @@ I Believe God - Alvin Martinez & Brooke Martinez"></textarea>
         const data = await res.json();
 
         resultsDiv.innerHTML = '';
+        lastResults = data.results || [];
 
-        if (data.results) {
-          for (const result of data.results) {
+        if (lastResults) {
+          for (const result of lastResults) {
             const itemDiv = document.createElement('div');
             if (result.found) {
               itemDiv.className = 'result-item found';
@@ -102,12 +110,41 @@ I Believe God - Alvin Martinez & Brooke Martinez"></textarea>
             }
             resultsDiv.appendChild(itemDiv);
           }
+
+          const foundVideos = lastResults.filter(r => r.found);
+          if (foundVideos.length > 0) {
+            document.getElementById('downloadBtn').classList.add('visible');
+          }
         }
       } catch (e) {
         resultsDiv.innerHTML = `<div class="result-item failed">Error: ${e.message}</div>`;
       }
 
       searchBtn.disabled = false;
+    }
+
+    async function downloadVideos() {
+      const foundVideos = lastResults.filter(r => r.found);
+      if (foundVideos.length === 0) return;
+
+      const downloadBtn = document.getElementById('downloadBtn');
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = 'Downloading...';
+
+      try {
+        const res = await fetch('/download-videos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ videos: foundVideos })
+        });
+        const data = await res.json();
+        alert('Download complete!');
+      } catch (e) {
+        alert('Error: ' + e.message);
+      }
+
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = 'Download Found Videos';
     }
   </script>
 </body>
