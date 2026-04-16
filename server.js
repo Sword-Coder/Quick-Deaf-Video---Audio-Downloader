@@ -180,6 +180,101 @@ app.get("/download-zip", (req, res) => {
   archive.finalize();
 });
 
+const CREDENTIALS = {
+  stationId: "88bdb544-61a0-42e0-ac1f-5d317969c64c",
+  userId: "9c60906a-75ff-4469-aaef-bc43d14ac8d5",
+  token: "6267b673-a285-410c-a583-472c262da9fc",
+};
+
+app.post("/search-videos", async (req, res) => {
+  const songs = req.body.songs;
+
+  if (!songs || !Array.isArray(songs) || songs.length === 0) {
+    return res.status(400).json({ error: "songs array required" });
+  }
+
+  const { stationId, userId, token } = CREDENTIALS;
+
+  try {
+    const postData = JSON.stringify({
+      stationid: stationId,
+      userid: userId,
+      token: token,
+    });
+
+    const options = {
+      hostname: "api.theanchor.app",
+      port: 443,
+      path: "/signLanguageRequest",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData),
+      },
+    };
+
+    const response = await new Promise((resolve, reject) => {
+      const request = https.request(options, (response) => {
+        let data = "";
+        response.on("data", (chunk) => (data += chunk));
+        response.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+      request.on("error", reject);
+      request.setTimeout(30000, () => {
+        request.destroy();
+        reject(new Error("Request timeout"));
+      });
+      request.write(postData);
+      request.end();
+    });
+
+    const allVideos = [
+      ...(response.approved || []).map(v => ({ ...v, ...v.value })),
+      ...(response.waitingApproval || []).map(v => ({ ...v.value })),
+      ...(response.withoutLyrics || []).map(v => ({ ...v.value })),
+    ];
+
+    const results = [];
+
+    if (songs && Array.isArray(songs)) {
+      for (const songTitle of songs) {
+        const trimmedTitle = songTitle.trim().toLowerCase();
+        const found = allVideos.find((v) => {
+          const songField = v.song || "";
+          return songField.toLowerCase().includes(trimmedTitle);
+        });
+        if (found) {
+          results.push({
+            searchTitle: songTitle,
+            found: true,
+            song: found.song,
+            video: found.video,
+            category: found.category,
+            doctype: found.doctype,
+            lyrics: found.lyrics,
+            lyricsby: found.lyricsby,
+            videoby: found.videoby,
+            submitted: found.submitted,
+          });
+        } else {
+          results.push({ searchTitle: songTitle, found: false });
+        }
+      }
+    }
+
+    res.json({ results });
+  } catch (e) {
+    console.error("Search error:", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () =>
   console.log(`Server running on http://localhost:${PORT}`),
